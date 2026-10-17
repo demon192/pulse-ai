@@ -248,17 +248,33 @@ separately, server-side, in `app/services/authz.py`.
 
 ## Running the tests
 
+**Backend — 129 tests**
+
 ```bash
 source .venv/bin/activate
-cd backend && pytest                   # 129 tests
+cd backend && pytest
 pytest --cov=app --cov-report=term-missing
 ```
 
 The suite runs against the in-memory store with the clock frozen, so every
-rules assertion is deterministic. See `docs/evaluation.md` for what it covers
-and what the results were.
+rules assertion is deterministic.
 
-Linting and type checking:
+**Frontend — 47 tests**
+
+```bash
+cd frontend && npm test
+npm run test:coverage
+```
+
+**Evaluation harness** — measures the deterministic behaviour against a
+labelled synthetic dataset and prints the numbers reported in
+`docs/evaluation.md`:
+
+```bash
+python scripts/run_evaluation.py
+```
+
+**Linting and type checking**
 
 ```bash
 ruff check backend/ scripts/

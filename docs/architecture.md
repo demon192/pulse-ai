@@ -205,6 +205,10 @@ tokens attach when dev personas are switched off, and no page changes.
 Types in `types/api.ts` are hand-written to mirror the Pydantic schemas, so a
 backend contract change that matters surfaces as a TypeScript error.
 
+Component tests run on Vitest with Testing Library against jsdom, with builders
+in `src/test/factories.ts` whose defaults mirror the seeded organisation — so a
+test only states the field it is actually about.
+
 ## Deliberate non-goals
 
 - **No microservices.** One FastAPI application with clean module boundaries.

@@ -20,8 +20,8 @@ python scripts/run_evaluation.py        # from the repository root
 
 | Metric | Result |
 | --- | --- |
-| Tests | **129 passed, 0 failed** |
-| Runtime | 2.55 s |
+| Backend tests | **129 passed, 0 failed** (2.55 s) |
+| Frontend tests | **47 passed, 0 failed** (2.27 s) |
 | Statement coverage (`backend/app`) | **90 %** |
 
 Coverage by the modules that carry the business logic:
@@ -43,9 +43,23 @@ against the in-memory store so it needs no cloud credentials. That adapter is a
 thin pass-through to the Google client and is exercised only by running against
 the emulator or a real project.
 
-Tests by area: authorization 26, handover workflow 17, AI layer 18,
+Backend tests by area: authorization 26, handover workflow 17, AI layer 18,
 dashboards 11, requests 10, candidate ranking 10, notifications 9,
 prioritisation 9, risk rules 8, startup 7, dependencies 4.
+
+Frontend tests cover the interactions where a wrong rendering would mislead a
+manager: the candidate list (7 — eligible and ineligible kept apart, no way to
+select an ineligible candidate, the scoring breakdown visible, the "no eligible
+candidate" message), the handover brief (6 — all eleven sections present,
+evidence kinds labelled, missing information shown, provenance stated), the
+action inbox row (7 — consequence stated, server-computed due label, blocked
+tasks named), the risk card (7 — evidence and suggested actions shown, no model
+call until asked, provenance labelled, a failed explanation does not hide the
+finding), the task row (7 — blocker reason, dependency, next step, and no
+language characterising the owner), the request submission flow (6 — tracked as
+an action item, the AI reading shown as a suggestion the engineer can correct,
+failures reported without losing input), and the API client (7 — persona header,
+query serialisation, error detail, field errors, unreachable backend).
 
 Every case the product brief asks for is covered, and each has a named test:
 
@@ -386,9 +400,11 @@ is correct for ~50 records and wrong for 50,000. The repository abstraction is
 where server-side queries go, and the first indexes are documented, but no load
 testing has been done.
 
-**No frontend test suite.** The UI is type-checked (`tsc -b` with `strict`) and
-every interaction was driven manually through the running application, but there
-are no automated component tests. That is the largest gap in the test coverage.
+**Frontend coverage is targeted, not broad.** 47 component and client tests
+cover the interactions where a wrong rendering would mislead a manager. The
+pages themselves — routing, the dashboards, the handover page's multi-step
+state — are type-checked and were driven manually through the running
+application, but have no automated tests. That is the largest remaining gap.
 
 **Single-worker caching.** The AI summary cache is persisted, but the Cloud Run
 configuration runs one worker per instance so that in-process state stays

@@ -154,9 +154,9 @@ Details in `docs/architecture.md`.
 
 ## 7. Technical feasibility
 
-Built and running. 129 automated tests pass with 90 % statement coverage of the
-backend; the container image builds and runs; all three demo scenarios complete
-end to end against persisted state. One developer, a conventional Python and
+Built and running. 129 backend and 47 frontend tests pass, with 90 % statement
+coverage of the backend; the container image builds and runs; all three demo
+scenarios complete end to end against persisted state. One developer, a conventional Python and
 TypeScript stack, no infrastructure beyond Cloud Run, Firestore and the Gemini
 API.
 
@@ -254,7 +254,7 @@ From the project's own harness on a labelled synthetic dataset
 
 | Area | Result |
 | --- | --- |
-| Automated tests | 129 passed, 90 % backend statement coverage |
+| Automated tests | 129 backend + 47 frontend passed, 90 % backend statement coverage |
 | Risk detection | precision 1.00, recall 1.00 (8 expected / 8 found) |
 | Quiet tasks wrongly flagged | 0 of 5 |
 | Findings from task age alone | 0 across ages 30–720 days |
@@ -280,8 +280,8 @@ issues, Jira, Slack and Google Calendar as *sources*, so TeamPulse reflects work
 that already happened instead of asking someone to re-enter it.
 
 **Then** — move the repository layer to server-side queries with the documented
-indexes; move the notification sweep to Cloud Scheduler; add the frontend test
-suite that is currently the largest gap in coverage.
+indexes; move the notification sweep to Cloud Scheduler; extend the frontend
+tests from components to the pages themselves.
 
 **After that** — optional outbound notifications (email, Slack, push), explicitly
 configured and authorised rather than on by default; a team-level retrospective
