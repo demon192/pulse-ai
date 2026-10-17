@@ -30,6 +30,10 @@ from app.schemas.domain import ActionItem, Milestone, Project, SupportRequest, T
 
 # A milestone inside this horizon amplifies the severity of nearby problems.
 MILESTONE_HORIZON_DAYS = 14.0
+# Diminishing weights applied to the findings, worst first, when scoring health.
+# Findings beyond the fourth do not reduce the score further: by then the
+# project is already reported as at risk and the detail is in the finding list.
+HEALTH_PENALTY_WEIGHTS = (0.50, 0.25, 0.15, 0.10)
 # Approval-shaped action types that can hold up downstream work.
 DECISION_ACTION_TYPES = frozenset(
     {ActionType.APPROVAL, ActionType.QUESTION, ActionType.BLOCKER}
@@ -515,10 +519,16 @@ def build_project_health(
         if t.is_open and t.due_date and (days_until(t.due_date, now=now) or 0.0) < 0
     )
 
-    # Health score starts at 100 and is reduced by the top findings only, so a
-    # project is not punished twice for the same underlying problem.
-    penalty = sum(finding.severity for finding in risks[:4]) * 0.45
-    health_score = _clamp(100 - penalty)
+    # Health starts at 100 and is reduced by the most severe findings with
+    # diminishing weight: the worst problem dominates, and each additional one
+    # adds less. Summing them equally saturated the score at zero on any project
+    # with several findings, which hid the difference between bad and worse.
+    health_score = _clamp(
+        100 - sum(
+            finding.severity * weight
+            for finding, weight in zip(risks, HEALTH_PENALTY_WEIGHTS, strict=False)
+        )
+    )
     if health_score >= 75:
         health = ProjectHealth.ON_TRACK
     elif health_score >= 50:

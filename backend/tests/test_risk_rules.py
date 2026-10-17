@@ -169,3 +169,36 @@ def test_project_health_degrades_with_findings(database):
     assert report.next_milestone is not None
     assert report.next_milestone.milestone_id == "ms-pay-1"
     assert report.next_milestone.at_risk is True
+
+
+def test_health_score_does_not_saturate_with_many_findings(database):
+    """Several findings must still leave a score that distinguishes degrees.
+
+    Summing the top findings equally pinned every troubled project at zero,
+    which hid the difference between 'bad' and 'worse'.
+    """
+    graph = DependencyGraph(database.tasks.list_all())
+
+    def health_for(project_id: str):
+        return build_project_health(
+            project=database.projects.require(project_id),
+            tasks=database.tasks.find(lambda t: t.project_id == project_id),
+            graph=graph,
+            milestones=database.milestones.list_all(),
+            requests=database.requests.list_all(),
+            actions=database.actions.list_all(),
+            now=FROZEN_NOW,
+        )
+
+    payments = health_for("proj-payments")
+    identity = health_for("proj-identity")
+    insights = health_for("proj-insights")
+
+    # The worst project has eight findings including a severity-100 one, and is
+    # still scored above the floor.
+    assert len(payments.risks) >= 6
+    assert payments.risks[0].severity == 100
+    assert 0 < payments.health_score < 25
+    # And the three projects remain ordered and distinguishable.
+    assert payments.health_score < identity.health_score < insights.health_score
+    assert insights.health_score == 100

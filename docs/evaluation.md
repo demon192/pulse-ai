@@ -20,7 +20,7 @@ python scripts/run_evaluation.py        # from the repository root
 
 | Metric | Result |
 | --- | --- |
-| Backend tests | **129 passed, 0 failed** (2.55 s) |
+| Backend tests | **130 passed, 0 failed** (2.0 s) |
 | Frontend tests | **47 passed, 0 failed** (2.27 s) |
 | Statement coverage (`backend/app`) | **90 %** |
 
@@ -45,7 +45,7 @@ the emulator or a real project.
 
 Backend tests by area: authorization 26, handover workflow 17, AI layer 18,
 dashboards 11, requests 10, candidate ranking 10, notifications 9,
-prioritisation 9, risk rules 8, startup 7, dependencies 4.
+prioritisation 9, risk rules 9, startup 7, dependencies 4.
 
 Frontend tests cover the interactions where a wrong rendering would mislead a
 manager: the candidate list (7 — eligible and ineligible kept apart, no way to

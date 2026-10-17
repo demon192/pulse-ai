@@ -248,7 +248,7 @@ separately, server-side, in `app/services/authz.py`.
 
 ## Running the tests
 
-**Backend — 129 tests**
+**Backend — 130 tests**
 
 ```bash
 source .venv/bin/activate
