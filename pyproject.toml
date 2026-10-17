@@ -1,0 +1,13 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", "frontend", "backend/static"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# B008: FastAPI Depends() in defaults is the framework idiom.
+# UP046/UP047: keep typing.Generic for predictable pydantic interop.
+ignore = ["B008", "E501", "UP046", "UP047"]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/*" = ["E402"]

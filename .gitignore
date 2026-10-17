@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Build output served by the backend
+backend/static/
+
+# Environment and credentials — never commit these
+.env
+.env.*
+!.env.example
+*-service-account*.json
+*credentials*.json
+gha-creds-*.json
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
