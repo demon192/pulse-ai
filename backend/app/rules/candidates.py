@@ -201,8 +201,12 @@ def score_candidate(
     total = round(sum(item.weighted_score for item in breakdown), 2)
     top_factors = sorted(breakdown, key=lambda item: -item.weighted_score)[:2]
     summary = (
-        f"Score {total:.0f}/100. Strongest factors: "
-        + "; ".join(f"{item.factor} ({item.weighted_score:.0f} pts)" for item in top_factors)
+        # int(x + 0.5) rather than f"{x:.0f}": Python rounds halves to even,
+        # which would disagree with the score shown next to this text.
+        f"Score {int(total + 0.5)}/100. Strongest factors: "
+        + "; ".join(
+            f"{item.factor} ({int(item.weighted_score + 0.5)} pts)" for item in top_factors
+        )
         + "."
     )
     return CandidateRecommendation(

@@ -94,6 +94,7 @@ def action_inbox_item(
     return ActionInboxItem(
         action=action,
         priority_detail=priority_detail,
+        owner_name=user_names.get(action.owner_id, action.owner_id),
         project_name=project_names.get(action.project_id or "") or None,
         task_title=task.title if task else None,
         requester_name=user_names.get(action.created_by, action.created_by),
@@ -148,10 +149,28 @@ def handover_view(
         )
         if document is not None
     ]
+    # A ranked candidate may see why *they* were recommended, but one
+    # engineer is never shown another engineer's workload-derived score.
+    visible_handover = handover
+    if not authz.can_approve_handover(database, viewer, handover):
+        visible_handover = handover.model_copy(
+            update={
+                "candidate_recommendations": [
+                    recommendation
+                    for recommendation in handover.candidate_recommendations
+                    if recommendation.user_id == viewer.id
+                ]
+            }
+        )
+
     return HandoverView(
-        handover=handover,
+        handover=visible_handover,
         unavailable_user_name=user_names.get(
             handover.unavailable_user_id, handover.unavailable_user_id
+        ),
+        total_candidate_count=len(handover.candidate_recommendations),
+        eligible_candidate_count=sum(
+            1 for item in handover.candidate_recommendations if item.eligible
         ),
         selected_backup_name=user_names.get(handover.selected_backup_id or "") or None,
         approved_by_name=user_names.get(handover.approved_by or "") or None,

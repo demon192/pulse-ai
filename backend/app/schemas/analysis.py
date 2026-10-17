@@ -85,6 +85,9 @@ class ActionPriority(AnalysisModel):
     action_id: str
     score: float
     bucket: str
+    # Days until the action's own due date, negative when overdue. Computed
+    # server-side so the UI never has to read the clock while rendering.
+    due_in_days: float | None = None
     factors: list[PriorityFactor] = Field(default_factory=list)
     blocks_task_ids: list[str] = Field(default_factory=list)
     affected_milestone_ids: list[str] = Field(default_factory=list)

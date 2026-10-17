@@ -119,6 +119,18 @@ def test_buckets_separate_the_inbox_sections(database):
     )
 
 
+def test_a_request_for_time_stays_under_support_even_when_work_depends_on_it(database):
+    """in-01 has dependents, but a one-on-one is not 'blocked work'."""
+    one_on_one = _action(
+        type=ActionType.ONE_ON_ONE, task_id="in-01", priority=Priority.LOW
+    )
+    assert _score(database, one_on_one).bucket == BUCKET_SUPPORT
+    # An unanswered question on the same task is blocked work, because the
+    # answer is what the dependent work is waiting for.
+    question = _action(type=ActionType.QUESTION, task_id="in-01", priority=Priority.LOW)
+    assert _score(database, question).bucket == BUCKET_BLOCKED_WORK
+
+
 def test_ranking_is_stable_and_descending(database):
     actions = [action for action in database.actions.list_all() if action.is_open]
     ranked = rank_actions(

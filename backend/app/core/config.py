@@ -50,10 +50,11 @@ class Settings(BaseSettings):
     seed_endpoint_enabled: bool = True
 
     # --- Gemini ---
-    # The model id is intentionally configurable: verify the current supported
-    # model list at https://ai.google.dev/gemini-api/docs/models before changing.
+    # The model id is intentionally configurable. Verify the current supported
+    # list at https://ai.google.dev/gemini-api/docs/models before changing it —
+    # Google deprecates ids (gemini-3.5-flash is deprecated and routed to 3.6).
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-3.5-flash"
+    gemini_model: str = "gemini-3.6-flash"
     gemini_use_vertex: bool = False
     gemini_vertex_project: str | None = None
     gemini_vertex_location: str = "us-central1"

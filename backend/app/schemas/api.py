@@ -200,6 +200,7 @@ class SupportRequestCreated(APIModel):
 class ActionInboxItem(APIModel):
     action: ActionItem
     priority_detail: ActionPriority
+    owner_name: str
     project_name: str | None = None
     task_title: str | None = None
     requester_name: str | None = None
@@ -263,6 +264,10 @@ class HandoverDecision(APIModel):
 class HandoverView(APIModel):
     handover: HandoverRecord
     unavailable_user_name: str
+    # Counts stay visible to everyone even when the per-candidate scores are
+    # filtered out for a non-manager viewer.
+    total_candidate_count: int = 0
+    eligible_candidate_count: int = 0
     selected_backup_name: str | None = None
     approved_by_name: str | None = None
     affected_tasks: list[Task] = Field(default_factory=list)

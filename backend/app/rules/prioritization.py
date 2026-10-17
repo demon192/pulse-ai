@@ -21,11 +21,6 @@ BUCKET_APPROVAL = "approvals"
 BUCKET_SUPPORT = "support"
 BUCKET_ROUTINE = "routine"
 
-_SUPPORT_TYPES = frozenset(
-    {ActionType.SUPPORT_REQUEST, ActionType.ONE_ON_ONE, ActionType.QUESTION}
-)
-
-
 def score_action(
     action: ActionItem,
     *,
@@ -146,6 +141,7 @@ def score_action(
         action_id=action.id,
         score=score,
         bucket=bucket,
+        due_in_days=round(remaining, 2) if remaining is not None else None,
         factors=factors,
         blocks_task_ids=blocked_task_ids,
         affected_milestone_ids=[milestone.id for milestone in affected_milestones],
@@ -156,15 +152,25 @@ def score_action(
 def _bucket_for(
     action: ActionItem, *, score: float, blocks: bool, overdue: bool
 ) -> str:
+    """Group an action the way a manager triages: by what it *is*, then by
+    whether it is holding work up.
+
+    A request for the manager's time stays under support even when the
+    engineer's task happens to have dependents — the conversation is not what
+    is blocking anything.
+    """
     if overdue or score >= 70.0 or action.priority is Priority.CRITICAL:
         return BUCKET_URGENT
-    if blocks or action.type is ActionType.BLOCKER:
+    if action.type is ActionType.BLOCKER:
         return BUCKET_BLOCKED_WORK
     if action.type in (ActionType.APPROVAL, ActionType.HANDOVER_APPROVAL):
         return BUCKET_APPROVAL
-    if action.type in _SUPPORT_TYPES:
+    if action.type in (ActionType.SUPPORT_REQUEST, ActionType.ONE_ON_ONE):
         return BUCKET_SUPPORT
-    return BUCKET_ROUTINE
+    # An unanswered question that is holding up other work is blocked work.
+    if action.type is ActionType.QUESTION:
+        return BUCKET_BLOCKED_WORK if blocks else BUCKET_SUPPORT
+    return BUCKET_BLOCKED_WORK if blocks else BUCKET_ROUTINE
 
 
 def _consequence(

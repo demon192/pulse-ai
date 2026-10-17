@@ -245,3 +245,50 @@ def test_public_user_projection_hides_workload_and_permissions(client):
     team = client.get("/api/team", headers=as_user(MANAGER)).json()
     sample = team[0]["user"]
     assert set(sample) == {"id", "name", "role", "title", "availability_status"}
+
+
+# --------------------------------------------------------------------------
+# Handover visibility
+# --------------------------------------------------------------------------
+
+
+def test_engineer_sees_only_their_own_candidate_score(client, database):
+    """A candidate learns why they were recommended, not how peers compare."""
+    from app.core.clock import utc_now
+
+    created = client.post(
+        "/api/handovers",
+        headers=as_user("eng-008"),
+        json={"start_time": utc_now().isoformat()},
+    ).json()["handover"]
+    client.post(f"/api/handovers/{created['id']}/analyze", headers=as_user(MANAGER))
+
+    manager_view = client.get(
+        f"/api/handovers/{created['id']}", headers=as_user(MANAGER)
+    ).json()
+    assert len(manager_view["handover"]["candidate_recommendations"]) > 1
+
+    engineer_view = client.get(
+        f"/api/handovers/{created['id']}", headers=as_user(ENG_ARJUN)
+    ).json()
+    recommendations = engineer_view["handover"]["candidate_recommendations"]
+    assert [item["user_id"] for item in recommendations] == [ENG_ARJUN]
+    # The headline counts stay accurate even though the list is filtered.
+    assert engineer_view["eligible_candidate_count"] == manager_view["eligible_candidate_count"]
+    assert engineer_view["total_candidate_count"] == manager_view["total_candidate_count"]
+
+
+def test_team_listing_can_be_scoped_to_one_project(client):
+    """Delegation needs to know who is authorised on *this* project."""
+    scoped = client.get(
+        "/api/team", headers=as_user(MANAGER), params={"project_id": "proj-payments"}
+    ).json()
+    authorized = {item["user"]["id"] for item in scoped if item["is_authorized_here"]}
+    assert ENG_ARJUN in authorized
+    # Mei is identity-only, so she must not look assignable on payments.
+    assert ENG_MEI not in authorized
+
+    refused = client.get(
+        "/api/team", headers=as_user(ENG_SAMUEL), params={"project_id": "proj-payments"}
+    )
+    assert refused.status_code == 403

@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.ai.service import AIService
@@ -171,16 +171,41 @@ def _register_exception_handlers(application: FastAPI) -> None:
 
 
 def _mount_frontend(application: FastAPI, settings: Settings) -> None:
-    """Serve the built single-page app alongside the API (Cloud Run layout)."""
+    """Serve the built single-page app alongside the API (Cloud Run layout).
+
+    Static assets are served from ``/assets``; every other unmatched path falls
+    back to ``index.html`` so client-side routes survive a page reload. The API
+    routers are registered first, so they always win.
+    """
     if not settings.serve_frontend:
         return
     dist = Path(settings.frontend_dist_dir)
     if not dist.is_absolute():
         dist = Path(__file__).resolve().parent.parent / dist
-    if not dist.exists():
-        logger.warning("SERVE_FRONTEND is on but %s does not exist", dist)
+    index_file = dist / "index.html"
+    if not index_file.exists():
+        logger.warning("SERVE_FRONTEND is on but %s does not exist", index_file)
         return
-    application.mount("/", StaticFiles(directory=str(dist), html=True), name="frontend")
+
+    assets = dist / "assets"
+    if assets.exists():
+        application.mount(
+            "/assets", StaticFiles(directory=str(assets)), name="frontend-assets"
+        )
+
+    @application.get("/{full_path:path}", include_in_schema=False)
+    async def _spa_fallback(full_path: str) -> FileResponse:
+        candidate = (dist / full_path).resolve()
+        # Serve a real file when one exists (favicon, robots.txt, ...), but never
+        # escape the dist directory.
+        if (
+            full_path
+            and candidate.is_file()
+            and candidate.is_relative_to(dist.resolve())
+        ):
+            return FileResponse(candidate)
+        return FileResponse(index_file)
+
     logger.info("Serving the frontend from %s", dist)
 
 

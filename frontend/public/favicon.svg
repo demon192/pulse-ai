@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="TeamPulse AI">
+  <rect width="32" height="32" rx="7" fill="#2f446e"/>
+  <path d="M8 17l5 5 11-11" stroke="#ffffff" stroke-width="3" fill="none"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

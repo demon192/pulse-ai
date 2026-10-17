@@ -2,21 +2,34 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.api.deps import Context
 from app.schemas.api import TeamMemberView
-from app.services import views
+from app.services import authz, views
 
 router = APIRouter(tags=["team"])
 
 
 @router.get("/team", response_model=list[TeamMemberView])
-def list_team(context: Context) -> list[TeamMemberView]:
+def list_team(
+    context: Context,
+    project_id: str | None = Query(
+        default=None,
+        description=(
+            "Scope is_authorized_here to this project, so a caller can tell who "
+            "may actually be given work on it."
+        ),
+    ),
+) -> list[TeamMemberView]:
     """Team members who share at least one project with the caller."""
+    if project_id is not None:
+        authz.require_project_access(context.db, context.user, project_id)
+    scope = {project_id} if project_id else context.project_ids
+
     members: list[TeamMemberView] = []
     for user in context.db.users.list_all():
-        shared = set(user.authorized_project_ids) & context.project_ids
+        shared = set(user.authorized_project_ids) & scope
         is_project_manager = any(
             project.manager_id == user.id for project in context.projects
         )
