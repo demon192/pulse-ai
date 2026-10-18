@@ -48,7 +48,7 @@ const NAV_ITEMS: NavItem[] = [
 const NOTIFICATION_POLL_MS = 20_000
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { session, switchPersona } = useSession()
+  const { session, switchPersona, signOut } = useSession()
   const location = useLocation()
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const unread = useAsync(() => api.notifications({ unread_only: true }), [session?.user.id], {
@@ -103,6 +103,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           currentUserId={session.user.id}
           onSwitch={switchPersona}
           authMode={session.auth_mode}
+          userEmail={session.user.email}
+          onSignOut={signOut}
         />
       </aside>
 
@@ -139,6 +141,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               currentUserId={session.user.id}
               onSwitch={switchPersona}
               authMode={session.auth_mode}
+              userEmail={session.user.email}
+              onSignOut={signOut}
             />
           </div>
         </div>
@@ -192,17 +196,35 @@ function SessionFooter({
   currentUserId,
   onSwitch,
   authMode,
+  userEmail,
+  onSignOut,
 }: {
   personas: { id: string; name: string; role: Role; title: string | null }[]
   currentUserId: string
   onSwitch: (userId: string) => Promise<void>
   authMode: string
+  userEmail: string
+  onSignOut: () => Promise<void>
 }) {
   const [switching, setSwitching] = useState(false)
   if (personas.length === 0) {
     return (
-      <div className="rounded-lg bg-navy-800/60 px-3 py-2 text-xs text-navy-200">
-        Signed in with {authMode} authentication.
+      <div className="rounded-lg bg-navy-800/60 px-3 py-2">
+        <p className="truncate text-xs text-navy-200" title={userEmail}>
+          {userEmail}
+        </p>
+        <p className="mt-0.5 text-[11px] text-navy-300/80">
+          Signed in with {authMode} authentication.
+        </p>
+        {authMode === 'firebase' ? (
+          <button
+            type="button"
+            onClick={() => void onSignOut()}
+            className="mt-2 w-full rounded-md border border-navy-700 px-2 py-1.5 text-xs text-navy-100 hover:bg-navy-800"
+          >
+            Sign out
+          </button>
+        ) : null}
       </div>
     )
   }

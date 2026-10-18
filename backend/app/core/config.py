@@ -7,14 +7,15 @@ Nothing sensitive is ever hardcoded here.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 Environment = Literal["local", "staging", "production"]
 DataBackend = Literal["memory", "firestore"]
 AuthMode = Literal["dev", "firebase"]
+ThinkingLevel = Literal["minimal", "low", "medium", "high", "unspecified"]
 
 
 class Settings(BaseSettings):
@@ -44,6 +45,12 @@ class Settings(BaseSettings):
     # --- Authentication ---
     auth_mode: AuthMode = "dev"
     firebase_project_id: str | None = None
+    # The Firebase *web* config, handed to the SPA by GET /api/auth-config so
+    # that sign-in needs no rebuild per environment. These are public client
+    # identifiers, not secrets: the API key identifies the project, it does not
+    # authorise anything. Authorisation is the ID token, verified server-side.
+    firebase_web_api_key: str | None = None
+    firebase_auth_domain: str | None = None
     # Allows the dev persona switcher. MUST be false in production.
     dev_auth_enabled: bool = True
     # Allows POST /api/admin/seed. MUST be false in production.
@@ -61,11 +68,20 @@ class Settings(BaseSettings):
     gemini_timeout_seconds: float = 30.0
     gemini_max_retries: int = 2
     gemini_enabled: bool = True
+    # Gemini 3.x models think before answering, and thought tokens are drawn
+    # from the same budget as max_output_tokens. Left uncapped, thinking
+    # starves the structured reply and every call returns truncated JSON.
+    # These capabilities summarise facts the rules engine already derived, so
+    # they do not need deep reasoning. "unspecified" lets the model decide.
+    gemini_thinking_level: ThinkingLevel = "low"
     # Generated summaries are cached this long before being considered stale.
     ai_cache_ttl_seconds: int = 900
 
     # --- HTTP ---
-    cors_allow_origins: list[str] = Field(
+    # NoDecode: the dotenv source would otherwise try to JSON-decode a
+    # list-typed field and fail before ``_split_origins`` ever runs, so a
+    # plain comma-separated CORS_ALLOW_ORIGINS could not be loaded from .env.
+    cors_allow_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
     )
     serve_frontend: bool = False
@@ -100,6 +116,22 @@ class Settings(BaseSettings):
             object.__setattr__(self, "seed_endpoint_enabled", False)
             object.__setattr__(self, "auth_mode", "firebase")
         return self
+
+    @property
+    def resolved_auth_domain(self) -> str | None:
+        """Explicit auth domain, else Firebase's default for the project."""
+        if self.firebase_auth_domain:
+            return self.firebase_auth_domain
+        if self.firebase_project_id:
+            return f"{self.firebase_project_id}.firebaseapp.com"
+        return None
+
+    @property
+    def sign_in_configured(self) -> bool:
+        """True when the SPA has everything it needs to start a sign-in."""
+        if self.auth_mode != "firebase":
+            return False
+        return bool(self.firebase_web_api_key and self.resolved_auth_domain)
 
     @property
     def ai_configured(self) -> bool:

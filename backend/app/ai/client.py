@@ -43,6 +43,14 @@ class AIInvalidOutput(ValueError):
     """The model replied, but the payload did not satisfy the schema."""
 
 
+class AIOutputTruncated(AIInvalidOutput):
+    """The reply was cut off by the output-token limit, so the JSON is partial.
+
+    Distinct from a malformed reply: the same call can succeed with a larger
+    budget, so the retry loop raises the limit rather than giving up.
+    """
+
+
 def _is_transient(error: Exception) -> bool:
     message = str(error).lower()
     return any(marker in message for marker in _TRANSIENT_MARKERS)
@@ -108,6 +116,23 @@ class GeminiClient:
         self._types = types
         return self._client
 
+    def _thinking_config(self):
+        """Cap thinking so it cannot consume the structured-output budget."""
+        level = self._settings.gemini_thinking_level
+        if level == "unspecified":
+            return None
+        return self._types.ThinkingConfig(thinking_level=level.upper())
+
+    @staticmethod
+    def _was_truncated(response) -> bool:
+        for candidate in getattr(response, "candidates", None) or []:
+            reason = getattr(candidate, "finish_reason", None)
+            if reason is not None and str(getattr(reason, "name", reason)).upper() == (
+                "MAX_TOKENS"
+            ):
+                return True
+        return False
+
     def generate_structured(
         self,
         *,
@@ -124,25 +149,29 @@ class GeminiClient:
         """
         client = self._ensure_client()
         types = self._types
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            response_mime_type="application/json",
-            response_schema=schema,
-            temperature=temperature,
-            max_output_tokens=max_output_tokens,
-            http_options=types.HttpOptions(
-                timeout=int(self._settings.gemini_timeout_seconds * 1000)
-            ),
-        )
+
+        def build_config(token_budget: int):
+            return types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                response_mime_type="application/json",
+                response_schema=schema,
+                temperature=temperature,
+                max_output_tokens=token_budget,
+                thinking_config=self._thinking_config(),
+                http_options=types.HttpOptions(
+                    timeout=int(self._settings.gemini_timeout_seconds * 1000)
+                ),
+            )
 
         attempts = max(1, self._settings.gemini_max_retries + 1)
+        budget = max_output_tokens
         last_error: Exception | None = None
         for attempt in range(attempts):
             try:
                 response = client.models.generate_content(
                     model=self._settings.gemini_model,
                     contents=user_content,
-                    config=config,
+                    config=build_config(budget),
                 )
             except Exception as exc:
                 last_error = exc
@@ -159,6 +188,22 @@ class GeminiClient:
                 raise AIUnavailable(
                     f"Gemini request failed: {type(exc).__name__}"
                 ) from exc
+
+            if self._was_truncated(response):
+                last_error = AIOutputTruncated(
+                    "Gemini stopped at the output-token limit before completing the JSON"
+                )
+                logger.warning(
+                    "Gemini reply truncated at %s output tokens (attempt %s/%s)",
+                    budget,
+                    attempt + 1,
+                    attempts,
+                )
+                if attempt + 1 < attempts:
+                    # Thinking and content share this budget, so widen it.
+                    budget = min(budget * 2, 8192)
+                    continue
+                raise last_error
 
             # Prefer the SDK's own parsed object, fall back to raw JSON.
             parsed = getattr(response, "parsed", None)

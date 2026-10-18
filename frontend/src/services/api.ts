@@ -65,7 +65,7 @@ export function setPersonaId(userId: string): void {
 }
 
 /**
- * In Firebase auth mode this is where the ID token would be attached. It is a
+ * In Firebase auth mode this is where the ID token is attached. It is a
  * separate hook so that swapping the dev persona switcher for real sign-in does
  * not touch any page.
  */
@@ -80,6 +80,9 @@ async function authHeaders(): Promise<Record<string, string>> {
   if (bearerTokenProvider) {
     const token = await bearerTokenProvider()
     if (token) headers.Authorization = `Bearer ${token}`
+    // Bearer mode is exclusive: a persona left in storage by an earlier
+    // development session must not ride along to a deployed instance.
+    return headers
   }
   const persona = getPersonaId()
   if (persona) headers['X-Dev-User-Id'] = persona

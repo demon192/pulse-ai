@@ -430,3 +430,133 @@ def test_injection_in_a_seeded_request_stays_inside_the_envelope(
     assert "[removed-tag]" in sent
     # The role was not changed by anything in the text.
     assert database.users.require("eng-003").role.value == "engineer"
+
+
+# --------------------------------------------------------------------------
+# Output-token budget
+#
+# Gemini 3.x models think before answering and thought tokens are drawn from
+# the same budget as the reply. Uncapped, thinking exhausts the budget and the
+# JSON arrives truncated, which is a different failure from a malformed reply:
+# the same call succeeds with more room.
+# --------------------------------------------------------------------------
+
+
+class _FakeTypes:
+    """The slice of ``google.genai.types`` that GeminiClient touches."""
+
+    class GenerateContentConfig(dict):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.__dict__.update(kwargs)
+
+    class HttpOptions(dict):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+
+    class ThinkingConfig(dict):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+
+
+class _FakeCandidate:
+    def __init__(self, finish_reason: str):
+        self.finish_reason = finish_reason
+
+
+class _FakeResponse:
+    def __init__(self, *, finish_reason="STOP", text=""):
+        self.candidates = [_FakeCandidate(finish_reason)]
+        self.parsed = None
+        self.text = text
+
+
+class _FakeModels:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.configs: list = []
+
+    def generate_content(self, *, model, contents, config):
+        self.configs.append(config)
+        return self._responses.pop(0)
+
+
+def _client_with(responses, settings):
+    """A GeminiClient wired to a fake SDK rather than the network."""
+    from app.ai.client import GeminiClient
+
+    client = GeminiClient(settings)
+    fake = type("FakeSDKClient", (), {})()
+    fake.models = _FakeModels(responses)
+    client._client = fake
+    client._types = _FakeTypes
+    return client, fake.models
+
+
+def test_truncated_reply_is_retried_with_a_larger_budget(configured_settings):
+    from app.ai.schemas import RiskExplanationAI
+
+    good = '{"explanation": "A blocked task holds up delivery.", "statements": []}'
+    client, models = _client_with(
+        [_FakeResponse(finish_reason="MAX_TOKENS", text='{"explanation": "A blo'),
+         _FakeResponse(finish_reason="STOP", text=good)],
+        configured_settings,
+    )
+
+    result = client.generate_structured(
+        schema=RiskExplanationAI,
+        system_instruction="rules",
+        user_content="facts",
+        max_output_tokens=1024,
+    )
+
+    assert result.explanation == "A blocked task holds up delivery."
+    assert [config.max_output_tokens for config in models.configs] == [1024, 2048]
+
+
+def test_persistent_truncation_is_reported_as_truncation(configured_settings):
+    from app.ai.client import AIOutputTruncated
+    from app.ai.schemas import RiskExplanationAI
+
+    client, models = _client_with(
+        [_FakeResponse(finish_reason="MAX_TOKENS", text="{") for _ in range(3)],
+        configured_settings,
+    )
+
+    with pytest.raises(AIOutputTruncated):
+        client.generate_structured(
+            schema=RiskExplanationAI,
+            system_instruction="rules",
+            user_content="facts",
+            max_output_tokens=512,
+        )
+    # Widened on every retry rather than repeating a call that cannot fit.
+    assert [config.max_output_tokens for config in models.configs] == [512, 1024, 2048]
+
+
+def test_thinking_is_capped_so_it_cannot_starve_the_reply(configured_settings):
+    from app.ai.schemas import RiskExplanationAI
+
+    client, models = _client_with(
+        [_FakeResponse(text='{"explanation": "ok", "statements": []}')],
+        configured_settings,
+    )
+    client.generate_structured(
+        schema=RiskExplanationAI, system_instruction="rules", user_content="facts"
+    )
+    assert models.configs[0].thinking_config == {"thinking_level": "LOW"}
+
+
+def test_thinking_cap_can_be_handed_back_to_the_model(configured_settings):
+    from app.ai.schemas import RiskExplanationAI
+
+    settings = configured_settings.model_copy(
+        update={"gemini_thinking_level": "unspecified"}
+    )
+    client, models = _client_with(
+        [_FakeResponse(text='{"explanation": "ok", "statements": []}')], settings
+    )
+    client.generate_structured(
+        schema=RiskExplanationAI, system_instruction="rules", user_content="facts"
+    )
+    assert models.configs[0].thinking_config is None

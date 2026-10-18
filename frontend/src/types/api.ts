@@ -70,6 +70,17 @@ export interface DevPersona {
   title: string | null
 }
 
+/** GET /api/auth-config — how this instance expects callers to authenticate. */
+export interface AuthConfig {
+  auth_mode: string
+  environment: string
+  sign_in_configured: boolean
+  dev_personas_enabled: boolean
+  firebase_api_key: string | null
+  firebase_auth_domain: string | null
+  firebase_project_id: string | null
+}
+
 export interface SessionInfo {
   user: SessionUser
   auth_mode: string

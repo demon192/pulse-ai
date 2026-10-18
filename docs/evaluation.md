@@ -20,7 +20,7 @@ python scripts/run_evaluation.py        # from the repository root
 
 | Metric | Result |
 | --- | --- |
-| Backend tests | **130 passed, 0 failed** (2.0 s) |
+| Backend tests | **138 passed, 0 failed** (2.1 s) |
 | Frontend tests | **47 passed, 0 failed** (2.27 s) |
 | Statement coverage (`backend/app`) | **90 %** |
 
@@ -35,7 +35,8 @@ Coverage by the modules that carry the business logic:
 | `services/handovers.py` | 91 % |
 | `services/authz.py` | 90 % |
 | `notifications/service.py` | 90 % |
-| `ai/service.py` | 91 % |
+| `ai/service.py` | 96 % |
+| `ai/client.py` | 70 % |
 | `repositories/firestore.py` | 0 % |
 
 `repositories/firestore.py` is uncovered by design: the suite runs entirely
@@ -363,6 +364,338 @@ modes:
 | With `ENVIRONMENT=production`: no credentials | **401** |
 | With `ENVIRONMENT=production`: auth mode in startup log | `auth=firebase` |
 
+Re-run on 18 October 2026 after the sign-in work, against the rebuilt image:
+
+| Check | Result |
+| --- | --- |
+| `docker build` with the Firebase SDK added | succeeds |
+| `/health` | `environment=production`, `ai_configured` reflects the key |
+| `GET /api/auth-config` | `sign_in_configured: true`, `dev_personas_enabled: false` |
+| Auth domain with only `FIREBASE_PROJECT_ID` set | derived as `<project>.firebaseapp.com` |
+| `GET /api/session` with no token | **401** |
+| `GET /api/session` with a dev persona header | **401** |
+| `POST /api/admin/seed` | **404** |
+| SPA at `/` in Firebase mode | renders sign-in; only `/api/auth-config` is requested |
+
+---
+
+## 9. Live Gemini output
+
+Measured on 17 October 2026 against the Gemini Developer API, model
+`gemini-3.6-flash`, from a local instance (`DATA_BACKEND=memory`,
+`GET /api/session` reporting `ai_configured: true`). This section replaces an
+earlier limitation stating that the model had never been called.
+
+All four capabilities were measured, the handover brief a day later than the
+rest: the key's free tier allows 20 `generateContent` requests per day for this
+model, and diagnosing the defect below consumed the first day's allowance.
+
+### A defect that made every live call degrade
+
+The first live call returned a deterministic fallback, not a model answer.
+Gemini 3.x models think before answering and **thought tokens are drawn from the
+same budget as `max_output_tokens`**. At the shipped budget the thinking ate it:
+
+| Configuration | `finish_reason` | Thought tokens | Content tokens | Usable |
+| --- | --- | --- | --- | --- |
+| 2048, thinking uncapped *(as shipped)* | `MAX_TOKENS` | 1965 | 68 | **no — truncated JSON** |
+| 2048, thinking `LOW` | `STOP` | 0 | 1091 | yes |
+| 2048, thinking `MINIMAL` | `STOP` | 0 | 872 | yes |
+| 4096, thinking uncapped | `STOP` | 2116 | 997 | yes, with 52 % spent on thoughts |
+| 4096, thinking `LOW` | `STOP` | 0 | 1102 | yes |
+
+The project briefing prompt is ~5950 input tokens, so this was not a marginal
+overrun: the reply was cut off mid-object every time, `_extract_json` raised,
+and the service degraded. **The test suite could not catch this** — it injects a
+stub client, which has no token accounting, so the failure only exists against
+the real API.
+
+Fixed in three places:
+
+- `gemini_thinking_level` (default `low`, `GEMINI_THINKING_LEVEL`) caps thinking
+  so it cannot starve the structured reply. These capabilities summarise facts
+  the rules engine has already derived; they do not need deep reasoning.
+- The client now detects `finish_reason == MAX_TOKENS` and raises
+  `AIOutputTruncated` rather than reporting a generic schema failure, **and
+  doubles the budget on retry** (capped at 8192) instead of repeating a call
+  that cannot fit.
+- Four tests cover truncation, retry widening, the thinking cap and handing the
+  cap back to the model (`gemini-thinking-level=unspecified`).
+
+A second, unrelated bug surfaced on the way: `.env.example` could not be loaded
+at all. `cors_allow_origins` is a `list[str]`, so the dotenv source tried to
+JSON-decode `CORS_ALLOW_ORIGINS=http://localhost:5173,...` and raised before the
+field validator that splits it ever ran. Anyone following the README's
+`cp .env.example .env` hit a startup crash. The field is now annotated
+`NoDecode`.
+
+### What the model actually produced
+
+After the fix, with `force_refresh=true` so nothing came from cache:
+
+| Capability | Endpoint | Latency | `meta.source` | Grounding notes |
+| --- | --- | --- | --- | --- |
+| Project briefing | `POST /api/ai/project-briefing` (`proj-payments`) | 10.9 s | `gemini` | none |
+| Request interpretation | `POST /api/ai/request-summary` (`req-002`) | 2.5 s | `gemini` | none |
+| Risk explanation | `POST /api/ai/risk-explanation` (`risk-blocked-pay-02`) | 2.3 s | `gemini` | none |
+| Handover brief | `POST /api/handovers/{id}/analyze` | 9.9 s | `gemini` | none, after the prompt fix below |
+
+"Grounding notes: none" is a measured result, not an absence of checking: the
+service drops any cited record id that does not literally appear in the facts
+and reports how many it dropped. **Across all three capabilities it dropped
+zero.** Every id the model cited was real.
+
+**Fact-checked claim by claim** against the exact facts payload each prompt
+received (dumped from `app.services.facts` and compared by hand):
+
+- *No invented dates, statuses, approvals or dependencies.* Every specific claim
+  traced back. "Passed its deadline on 2026-10-15 and remains open in
+  'in_review' status" matches `pay-01` exactly. "Waiting 3 days and blocks 2
+  dependent tasks" matches `risk-pending-act-001`. "Targeted in 3 days with 0 of
+  3 tasks completed" matches `ms-pay-1`. The two blocker explanations paraphrase
+  the recorded `blocked_reason` text on `pay-02` and `pay-05` without
+  embellishment.
+- *`key_risks` tracked the rules engine.* Exactly 8 notes for the 8 findings,
+  one each, none invented — so the grounder's "relabelled as hypothesis" path
+  never fired.
+- *`blockers` stayed literal.* Only `pay-02` and `pay-05`, the two tasks whose
+  recorded status is `blocked`. It did **not** include `pay-01`, which is
+  overdue and in review but not blocked — the distinction the prompt asks for.
+- *Task age was not used as evidence.* No statement reasoned from how long a
+  task had existed. The durations that do appear ("waiting 3 days", "waiting 1
+  day") are pending-decision ages supplied by the rules engine as finding
+  evidence, which is what the prompt permits.
+- *No assessment of people.* The briefing names no engineer at all, despite
+  owner names being present in the facts.
+- *Untrusted text was summarised, not obeyed.* The `req-002` description is
+  engineer-authored text inside the `<untrusted_content>` envelope; the model
+  reported the spec-versus-compliance conflict and grounded
+  `suggested_task_id` to `pay-05`, a real candidate task.
+
+**`evidence_kind` was used correctly, with one soft edge.** All 8 `key_risks`
+came back `rule_derived` and both `blockers` `verified_fact`, both as
+instructed. In the risk explanation, three of four statements are right
+(`verified_fact` for the recorded blocker, `rule_derived` for the detection,
+`recommendation` for the suggested action). The fourth — "'Settlement
+reconciliation UI' depends on 'Implement settlement worker' and cannot proceed"
+— is labelled `verified_fact`. The dependency is a recorded fact, but "cannot
+proceed" is an inference layered on top of it, so `rule_derived` would be the
+honest label. The prompt does not currently say what to do with a claim that
+mixes a recorded fact and an inference. Left as measured rather than tuned away,
+since one sample is not enough to justify a prompt change.
+
+The same response contained one cosmetic artifact: "the API contract contract
+blocker".
+
+### Schemas needed no changes; two prompt rules did
+
+The three capabilities above needed no prompt changes. The handover brief
+needed two, both recorded in the subsection above: untrusted text was being
+labelled `verified_fact`, and the `dependencies` section ignored the
+`dependents` direction. Neither was visible until a prompt put substantial
+engineer-authored text in front of the model.
+
+The response schemas translated cleanly to the model's JSON-schema dialect. The
+Pydantic classes pass straight to `response_schema`, and `response.parsed`
+returned a populated `ProjectBriefingAI` — so the SDK validated server-side
+against the same schema. The deliberate avoidance of optionals and free-form
+maps paid off: the two enum fields (`RequestCategory`, `Priority`) and the
+`HandoverSectionKey` enum round-tripped without a single validation failure. No
+schema change is needed.
+
+### The handover brief, and two prompt defects it exposed
+
+Measured 18 October 2026 against the same model. `POST /analyze` generates one
+brief per affected task, two per analysis, so this is the only capability that
+issues two model calls per request.
+
+Both briefs came back from the model with **all 11 required sections present and
+none filled deterministically** — the grounder's "Filled from stored records
+because the model omitted them" note did not fire. Section 4 measured that the
+fallback can always produce a complete brief; this measures that the model does
+too.
+
+Fact-checking it against the facts payload surfaced two defects that the other
+three capabilities could not, because the handover brief is the only prompt that
+puts substantial engineer-authored text in front of the model:
+
+**1. Untrusted text was being promoted to verified fact.** For `pay-04` the
+model wrote "Backoff has been implemented per the RFC." and labelled it
+`verified_fact` with an empty `source_ids`. The claim is not invented — it comes
+from task update `upd-004`, "Backoff implemented per the RFC. Still need the
+sandbox benchmark before enabling it in staging." But that update arrives inside
+`<untrusted_content>`: it is the absent engineer's own report, and nothing has
+checked it. For a handover brief this is the most consequential label in the
+document, because an incoming engineer who reads "verified fact" will not
+re-verify the work.
+
+The cause was a gap in the prompt's own taxonomy. `verified_fact` was defined as
+"stated directly in <facts>" and no category described "someone wrote this down
+and nobody checked it", so the model reached for the closest fit. The rule now
+says plainly that a statement resting on `<untrusted_content>` is never a
+`verified_fact`, "however confidently that text asserts it: someone wrote it,
+nothing checked it", and must be attributed in the prose.
+
+**2. A recorded dependency was reported as absent.** `pay-04`'s `dependencies`
+section read "Not recorded in TeamPulse." and was labelled `hypothesis`, while
+the facts carried `dependents: [pay-06]`. The facts expose the two directions as
+separate keys — `dependencies` (what this task waits on, empty here) and
+`dependents` (what waits on it, `pay-06`) — and the prompt named neither, so the
+model answered on the key that shares the section's name. For a handover this
+under-reports the blast radius: the incoming engineer is not told that the
+gateway sandbox load test is waiting on them.
+
+After both fixes, re-measured on the same data:
+
+| Section | Before | After |
+| --- | --- | --- |
+| `pay-04` work_completed | `verified_fact`, no citation, stated as fact | `hypothesis`, cited, "In task update upd-004, Rhea Kapoor reported that…" |
+| `pay-04` dependencies | `hypothesis`, "Not recorded in TeamPulse." | `verified_fact`, cites `pay-06`, names it as the downstream dependent |
+| `pay-02` work_completed | `hypothesis`, no citation | `hypothesis`, cited, attributed to the named engineer |
+| `missing_information` label | `verified_fact` on one task, `recommendation` on the other | `recommendation` on both |
+| Unverifiable references dropped | **1** | **0** |
+
+The regenerated `missing_information` also became the right kind of sharp:
+"Verification of committed/merged code reported in task update `upd-004`" — the
+brief now tells the incoming engineer exactly which claim is a self-report
+awaiting confirmation.
+
+**A structural limitation this exposed, not fixed.** `collect_ids` builds the
+citation allow-list by walking `facts` only, so the id of an untrusted item is
+not citable: a correctly-sourced claim from task update `upd-004` cannot cite
+`upd-004` without the grounder stripping it as unverifiable — which is what the
+single dropped reference in the first run was. The prompt now works around this
+by requiring attribution in the prose, so provenance survives in the text even
+though the structured citation cannot. The clean fix is for the envelope's own
+item ids to join the allow-list, since TeamPulse constructs them and they are
+not model-invented. That changes grounding semantics the current tests assert,
+so it is recorded here rather than done.
+
+### Free-tier quota is the operative constraint
+
+Of ~20 live requests, **6 returned `503 UNAVAILABLE`** ("model is currently
+experiencing high demand") and the rest were spread across diagnosis. The daily
+allowance then ran out:
+
+```
+Quota exceeded for metric: generate_content_free_tier_requests,
+limit: 20, model: gemini-3.6-flash ... Please retry in 7h17m30s
+```
+
+Two consequences, both unresolved:
+
+- **The handover brief is still unmeasured against the live model.** It is the
+  largest prompt — eleven sections per task, two tasks per analysis, so two
+  calls per `POST /analyze` — and the most likely to need a budget above the
+  4096 it currently asks for. Both attempts returned all 11 sections, but filled
+  deterministically from stored records, with `meta.notes` reporting
+  `AIUnavailable`. That the fallback produces a complete brief is worth
+  something, and is what section 4 already measured; it is not a measurement of
+  the model.
+- **The retry policy is wrong for quota errors.** `429` matches the transient
+  marker list, so the client retries three times with 0.5 s and 1 s backoff —
+  useless against a per-minute limit and meaningless against a per-day one, and
+  it spends two further requests of a 20-request allowance to discover this. The
+  response carries `RetryInfo.retryDelay` (26250 s here) and the client ignores
+  it. It should not retry when the server states a delay it cannot wait out.
+  Not fixed: it changes failure semantics the existing tests assert, and the
+  honest answer for a demo is a paid tier rather than cleverer retries.
+
+Any deployment intended to show the model working needs billing enabled. On the
+free tier a single manager walking the demo can exhaust the day's quota.
+
+---
+
+## 10. Against real Google Cloud
+
+Measured 18 October 2026 on project `pulseai-b2d98`, **free tier only** — no
+billing account is linked, which is what bounds this section.
+
+The application ran against the real Firestore database and the real Gemini API,
+in two configurations: full production mode, and a staging run that keeps the
+Firestore backend but uses the development persona header, so the data and model
+paths could be exercised without a Firebase sign-in.
+
+**Firestore, with the project's own adapter.** `seed()` wrote the demo
+organisation through `FirestoreDocumentStore` into `pulseai-b2d98`
+(collection prefix `tp_`), and the records were read back from the database:
+
+| Check | Result |
+| --- | --- |
+| Collections written | 11 users, 3 projects, 4 milestones, 19 tasks, 5 documents, 3 decisions, 7 task updates, 5 requests, 5 actions, 3 notifications |
+| `mgr-001` email rewritten and read back | confirmed from Firestore, not from memory |
+| Manager dashboard served from Firestore | 3 projects, 8 risks, 5 inbox items, 4 open requests |
+| Project health from Firestore records | Payments `at_risk` (score 7), Identity `needs_attention` (62), Insights `on_track` (100) |
+
+Those are the same numbers the in-memory evaluation reports, which is the point:
+the repository abstraction returns the same answers over either store.
+
+**Gemini against Firestore-sourced facts.** `POST /api/ai/project-briefing` on
+`proj-payments`, `force_refresh=true`: `meta.source: "gemini"`, not degraded,
+**no grounding notes** — 8 key risks for the 8 rules-engine findings and 2
+blockers, matching section 9. The facts came out of Firestore rather than the
+in-memory seed, so the whole chain — Firestore read, rules engine, fact
+assembly, model call, grounding — works against live infrastructure.
+
+**Production guardrails, against the real project.** `ENVIRONMENT=production`,
+`DATA_BACKEND=firestore`, `AUTH_MODE=firebase`, real Firebase web config:
+
+| Check | Result |
+| --- | --- |
+| `/health` | `environment=production`, `data_backend=firestore`, `ai_configured=true` |
+| `GET /api/session`, no token | **401** "A bearer token is required." |
+| `GET /api/session`, dev persona header | **401** — the header is inert in production |
+| `GET /api/session`, malformed bearer token | **401** "Invalid or expired credentials." |
+| `POST /api/admin/seed` | **404** |
+| `GET /api/auth-config` | `sign_in_configured: true`, real web API key, `pulseai-b2d98.firebaseapp.com` |
+| SPA at `/` | renders sign-in; `/api/auth-config` is the only pre-auth request |
+
+The malformed-token row matters more than it looks: a 401 reading "Invalid or
+expired credentials" rather than "A bearer token is required" means the Firebase
+Admin SDK initialised and actually rejected the token, so verification runs
+rather than being skipped.
+
+### What the free tier made impossible
+
+**Cloud Run deployment did not happen.** The project has no billing account —
+both accounts visible to the signed-in user are closed — and the required
+services cannot even be switched on:
+
+```
+FAILED_PRECONDITION: Billing account for project '511197919775' is not found.
+Billing must be enabled for activation of service(s)
+'artifactregistry, cloudbuild, run, secretmanager'
+reason: UREQ_PROJECT_BILLING_NOT_FOUND
+```
+
+Running on the free tier is a deliberate choice for this project, so this is a
+constraint rather than a fault. **There is no deployment URL, and none is
+claimed anywhere.** What stands in its place is the container evidence in
+section 8 — the image builds, runs, serves the SPA and enforces every production
+guardrail locally — plus the real-infrastructure evidence above.
+
+**A real end-user sign-in was never completed.** Firebase Authentication has
+never been provisioned on the project: Firebase's own endpoint, called with the
+project's real web API key, answers
+
+```
+POST accounts:createAuthUri  ->  400 CONFIGURATION_NOT_FOUND
+```
+
+and that is exactly the error the browser received when the sign-in button was
+clicked, so the attempt reached Firebase and was refused. Provisioning it
+through the Identity Platform API is also closed on the free tier
+(`BILLING_NOT_ENABLED : Identity Platform feature requires billing to be
+enabled`), and the config cannot be patched because no config exists to patch.
+The one free route is the Firebase console — Authentication, "Get started", then
+enabling a provider — which is a human action nothing here can perform.
+
+So the sign-in path is verified up to the point of the identity provider and no
+further: the SPA fetches its configuration and renders sign-in, the API rejects
+absent, stale and malformed credentials, and the email-to-user mapping was
+prepared by seeding `mgr-001` with a real address. Whether a genuine Google
+identity resolves to the manager dashboard is **unverified**.
+
 ---
 
 ## Known limitations
@@ -370,17 +703,35 @@ modes:
 **Not validated against reality.** Every number here comes from synthetic data
 with hand-written expectations. No real team has used this.
 
-**Gemini has not been exercised against the live API.** No API key was available
-in the build environment. The integration is real — correct SDK surface,
-response schemas, retries, timeouts, grounding — and is tested through an
-injected client covering success, malformed output, invalid enums, transport
-failure, rate limiting and timeouts. But the prompts have not been run against
-the actual model, so output quality is unmeasured. The deterministic fallback
-path, which is what the evaluation above measured, is fully exercised.
+**Live output quality rests on one or two samples per capability.** One
+project, one request, one finding, and two runs of the handover brief. Enough to
+establish that the model grounds its claims, and enough that the handover brief
+exposed two real prompt defects — but not enough to measure how often either
+behaviour occurs. The two prompt fixes are verified on exactly one re-run of the
+same data, which demonstrates they changed the labelling in the right direction,
+not that they hold across varied input. One soft `evidence_kind` edge in the risk
+explanation is recorded and deliberately left untuned for the same reason.
+
+**The citation allow-list cannot reach untrusted items.** `collect_ids` walks
+`facts` only, so a claim correctly sourced from a task update cannot cite that
+update's id without the grounder stripping it. The prompt works around this by
+requiring attribution in the prose. Section 9 records the clean fix.
 
 **Not deployed.** Cloud Run configuration is complete and the image is verified
-locally, but no Google Cloud credentials were available, so deployment was not
-executed and there is no URL to report.
+locally, and the application has now been run against the project's real
+Firestore and the live Gemini API (section 10). But Cloud Run, Cloud Build,
+Artifact Registry and Secret Manager all require a billing account, this project
+runs on the free tier by choice, and its two billing accounts are closed — so
+the services cannot be enabled, deployment was not executed, and **there is no
+URL to report**.
+
+**No real sign-in has been completed.** Firebase Authentication is not
+provisioned on the project, and the API route to provision it requires billing
+(section 10). Everything up to the identity provider is verified — configuration
+delivery, sign-in rendering, and rejection of absent, stale and malformed
+credentials — but no genuine identity has reached the manager dashboard, so the
+email-to-user mapping is exercised only by the seed script's read-back, not by a
+token.
 
 **Risk weights are guesses.** The severity formula and the 30/25/20/15/10
 candidate weights were chosen to produce sensible orderings on this dataset.

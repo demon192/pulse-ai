@@ -391,3 +391,23 @@ class HealthResponse(APIModel):
     data_backend: str
     ai_configured: bool
     version: str
+
+
+class AuthConfigResponse(APIModel):
+    """What the SPA needs to start a sign-in, fetched before any session.
+
+    Unauthenticated by necessity: the client cannot authenticate until it knows
+    how to. It carries public client identifiers only — never a secret, and
+    never anything about a specific user.
+    """
+
+    auth_mode: str
+    environment: str
+    # False when auth_mode is 'firebase' but the web config is missing, which
+    # is a misconfigured deployment: nobody can sign in. The SPA says so
+    # instead of showing a sign-in button that cannot work.
+    sign_in_configured: bool
+    dev_personas_enabled: bool
+    firebase_api_key: str | None = None
+    firebase_auth_domain: str | None = None
+    firebase_project_id: str | None = None

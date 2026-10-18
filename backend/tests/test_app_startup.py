@@ -55,3 +55,71 @@ def test_production_settings_disable_dev_affordances():
     assert production.dev_auth_enabled is False
     assert production.seed_endpoint_enabled is False
     assert production.auth_mode == "firebase"
+
+
+# --------------------------------------------------------------------------
+# GET /api/auth-config
+#
+# The SPA cannot authenticate until it knows how, so this endpoint is public by
+# necessity. It must therefore carry public client identifiers only.
+# --------------------------------------------------------------------------
+
+
+def test_auth_config_is_public_and_describes_dev_mode(client):
+    response = client.get("/api/auth-config")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["auth_mode"] == "dev"
+    assert body["dev_personas_enabled"] is True
+    # Nothing Firebase-shaped leaks out of a development instance.
+    assert body["sign_in_configured"] is False
+    assert body["firebase_api_key"] is None
+    assert body["firebase_auth_domain"] is None
+
+
+def test_auth_config_hands_the_spa_what_sign_in_needs():
+    from app.core.config import Settings
+    from app.main import create_app
+    from app.repositories.database import Database
+    from app.repositories.memory import InMemoryDocumentStore
+    from fastapi.testclient import TestClient
+
+    settings = Settings(
+        environment="production",
+        data_backend="memory",
+        firebase_project_id="teampulse-demo",
+        firebase_web_api_key="public-web-api-key",
+    )
+    app = create_app(settings=settings, database=Database(InMemoryDocumentStore()))
+    with TestClient(app) as test_client:
+        body = test_client.get("/api/auth-config").json()
+
+    assert body["auth_mode"] == "firebase"
+    assert body["sign_in_configured"] is True
+    assert body["dev_personas_enabled"] is False
+    assert body["firebase_api_key"] == "public-web-api-key"
+    # Derived from the project id rather than requiring a second variable.
+    assert body["firebase_auth_domain"] == "teampulse-demo.firebaseapp.com"
+
+
+def test_auth_config_reports_a_deployment_nobody_can_sign_in_to():
+    from app.core.config import Settings
+
+    # Firebase mode with no web config: the SPA must say so rather than show a
+    # sign-in button that cannot work.
+    settings = Settings(environment="production", firebase_project_id="teampulse-demo")
+    assert settings.sign_in_configured is False
+    assert settings.resolved_auth_domain == "teampulse-demo.firebaseapp.com"
+
+
+def test_explicit_auth_domain_wins_over_the_derived_one():
+    from app.core.config import Settings
+
+    settings = Settings(
+        environment="production",
+        firebase_project_id="teampulse-demo",
+        firebase_auth_domain="auth.teampulse.example",
+        firebase_web_api_key="public-web-api-key",
+    )
+    assert settings.resolved_auth_domain == "auth.teampulse.example"
+    assert settings.sign_in_configured is True

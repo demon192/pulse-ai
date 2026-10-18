@@ -10,11 +10,17 @@ import { Notifications } from '@/pages/Notifications'
 import { ProjectDetail } from '@/pages/ProjectDetail'
 import { Projects } from '@/pages/Projects'
 import { Requests } from '@/pages/Requests'
+import { SignIn } from '@/pages/SignIn'
 import { Button, Card, CardBody, LoadingBlock } from '@/components/ui/primitives'
 import { useSession } from '@/hooks/useSession'
 
 export default function App() {
-  const { session, loading, error, reload } = useSession()
+  const { session, authConfig, loading, error, needsSignIn, reload } = useSession()
+
+  // Nobody is signed in and this instance has no other way in.
+  if (needsSignIn && authConfig) {
+    return <SignIn config={authConfig} />
+  }
 
   if (loading && !session) {
     return (
@@ -36,8 +42,9 @@ export default function App() {
               {error ?? 'No session could be established.'}
             </p>
             <p className="mt-2 text-sm text-slate-500">
-              Check that the backend is running on port 8000 and that the development persona
-              header is permitted by the current configuration.
+              {authConfig?.auth_mode === 'firebase'
+                ? 'You are signed in, but no TeamPulse user has that email address. Ask an administrator to add it, or seed the demo organisation with --manager-email.'
+                : 'Check that the backend is running on port 8000 and that the development persona header is permitted by the current configuration.'}
             </p>
             <Button variant="primary" className="mt-4" onClick={() => void reload()}>
               Try again

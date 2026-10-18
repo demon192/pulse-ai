@@ -143,6 +143,9 @@ The settings that change behaviour most:
 | `SEED_ENDPOINT_ENABLED` | `true` | `POST /api/admin/seed`. Cannot be true in production. |
 | `GEMINI_API_KEY` | — | Absent means every AI capability degrades to a deterministic answer. |
 | `GEMINI_MODEL` | `gemini-3.6-flash` | Verify the current id before changing — Google retires model ids. |
+| `GEMINI_THINKING_LEVEL` | `low` | Caps model thinking. Thought tokens come out of the same budget as the reply, so leaving this uncapped truncates the structured output. |
+| `FIREBASE_PROJECT_ID` | — | Verifies ID tokens, and derives the sign-in domain when `FIREBASE_AUTH_DOMAIN` is unset. |
+| `FIREBASE_WEB_API_KEY` | — | The Firebase **web** API key, served to the SPA by `GET /api/auth-config`. Public client identifier, not a secret. Without it nobody can sign in to a production instance. |
 | `SERVE_FRONTEND` | `false` | Serve the built SPA from the backend. |
 | `DEMO_DATA_MODE` | `true` | Labels synthetic records in the UI and auto-seeds the in-memory backend. |
 
@@ -163,7 +166,19 @@ fallback and the UI labels which one produced a given answer. To enable it:
 GEMINI_ENABLED=true
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.6-flash
+GEMINI_THINKING_LEVEL=low
 ```
+
+> **Enable billing before demoing.** The free tier allows **20 requests per day**
+> for `gemini-3.6-flash`. One manager walking the demo can exhaust it, after
+> which every capability degrades to its deterministic fallback — correct
+> behaviour, but not a demonstration of the model.
+
+> **Do not raise `GEMINI_THINKING_LEVEL` without raising the token budgets.**
+> Gemini 3.x thinks before answering and thought tokens are drawn from
+> `max_output_tokens`. Uncapped at the budgets these capabilities request, the
+> thinking consumes the budget and the reply arrives as truncated JSON — see
+> `docs/evaluation.md` section 9 for the measured numbers.
 
 **Option B — Vertex AI** (no API key; uses Application Default Credentials):
 
@@ -241,6 +256,32 @@ Firebase Admin SDK and maps the verified email to a TeamPulse user.
 `frontend/src/services/api.ts` exposes `setBearerTokenProvider()` as the single
 place to attach the token — no page needs to change.
 
+The SPA asks the instance it is served from how to authenticate, rather than
+having a project baked in at build time:
+
+```
+GET /api/auth-config   ->  { auth_mode, sign_in_configured, firebase_api_key, ... }
+```
+
+That endpoint is unauthenticated by necessity — a client cannot authenticate
+until it knows how — and carries public client identifiers only. One container
+image therefore serves every environment, and changing projects is an
+environment-variable change, not a rebuild. When `auth_mode` is `firebase`,
+`frontend/src/pages/SignIn.tsx` offers Google sign-in and email/password, and
+the dev persona header is never sent alongside a bearer token.
+
+**A real identity must match a seeded user.** The demo organisation's addresses
+are `@example.com`, which no identity provider will issue, and the backend maps
+a verified email to a TeamPulse user. Point the manager persona at an account
+you can sign in with:
+
+```bash
+python scripts/seed_demo_data.py --manager-email you@example.com
+```
+
+Without that, sign-in succeeds and the API then answers
+`401 No TeamPulse account exists for this identity`.
+
 Authentication only establishes *who* is calling. What they may see is decided
 separately, server-side, in `app/services/authz.py`.
 
@@ -248,7 +289,7 @@ separately, server-side, in `app/services/authz.py`.
 
 ## Running the tests
 
-**Backend — 130 tests**
+**Backend — 138 tests**
 
 ```bash
 source .venv/bin/activate
@@ -308,23 +349,49 @@ done
 # 3. Build and deploy.
 gcloud builds submit --tag "${REGION}-docker.pkg.dev/${PROJECT_ID}/teampulse/app:latest"
 
+# FIREBASE_WEB_API_KEY is the Firebase *web* API key (Project settings -> General
+# -> Your apps -> Web app). It is a public client identifier, not a secret, and
+# the SPA cannot start a sign-in without it.
 gcloud run deploy teampulse-ai \
   --image "${REGION}-docker.pkg.dev/${PROJECT_ID}/teampulse/app:latest" \
   --region "$REGION" \
   --service-account "$SA" \
-  --set-env-vars "ENVIRONMENT=production,DATA_BACKEND=firestore,AUTH_MODE=firebase,SERVE_FRONTEND=true,DEMO_DATA_MODE=false,FIRESTORE_PROJECT_ID=${PROJECT_ID},FIREBASE_PROJECT_ID=${PROJECT_ID},GEMINI_MODEL=gemini-3.6-flash" \
+  --set-env-vars "ENVIRONMENT=production,DATA_BACKEND=firestore,AUTH_MODE=firebase,SERVE_FRONTEND=true,DEMO_DATA_MODE=false,FIRESTORE_PROJECT_ID=${PROJECT_ID},FIREBASE_PROJECT_ID=${PROJECT_ID},FIREBASE_WEB_API_KEY=${FIREBASE_WEB_API_KEY},GEMINI_MODEL=gemini-3.6-flash,GEMINI_THINKING_LEVEL=low" \
   --set-secrets "GEMINI_API_KEY=teampulse-gemini-key:latest" \
   --min-instances 0 --max-instances 4 --cpu 1 --memory 512Mi
+```
 
-# 4. Verify before announcing anything.
+```bash
+# 4. Make the instance reachable by a real person.
+#    a) Enable a sign-in provider: Firebase console -> Authentication ->
+#       Sign-in method -> Google (and/or Email/Password).
+#    b) Authorise the Cloud Run domain: Authentication -> Settings ->
+#       Authorized domains -> add the service host (e.g. teampulse-ai-xxxx.a.run.app).
+#       Sign-in fails with auth/unauthorized-domain until this is done.
+#    c) Seed Firestore and point the manager persona at your account. The seed
+#       script refuses to run against ENVIRONMENT=production, so run it locally
+#       against the project rather than from the deployed service.
+gcloud auth application-default login
+DATA_BACKEND=firestore ENVIRONMENT=local FIRESTORE_PROJECT_ID="$PROJECT_ID" \
+  python scripts/seed_demo_data.py --manager-email you@example.com
+
+firebase deploy --only firestore:rules,firestore:indexes
+
+# 5. Verify before announcing anything.
 SERVICE_URL=$(gcloud run services describe teampulse-ai --region "$REGION" --format='value(status.url)')
 curl -fsS "${SERVICE_URL}/health"
 ```
 
 Then confirm, in the deployed instance: the health endpoint reports
 `environment=production`, `GET /api/session` rejects a request without a token,
-`POST /api/admin/seed` returns 404, the manager dashboard loads, and generating
-a project briefing reports `source: "gemini"` rather than a degraded fallback.
+`POST /api/admin/seed` returns 404, `GET /api/auth-config` reports
+`sign_in_configured: true`, a real sign-in reaches the manager dashboard, and
+generating a project briefing reports `source: "gemini"` rather than a degraded
+fallback.
+
+> The briefing check needs Gemini quota. On the free tier the service shares one
+> allowance of **20 requests per day** with every other caller of that key — see
+> the warning under [Enabling Gemini](#enabling-gemini).
 
 **Record the deployment URL only after those checks pass.**
 
@@ -430,11 +497,27 @@ requires `backend/static/index.html` to exist. Run `npm run build` first.
 
 Built and verified locally. The application runs, both role experiences work,
 and all three demo scenarios complete end to end against real persisted state.
+
+**Gemini has now been run against the live API** (`gemini-3.6-flash`,
+17–18 October 2026). All four capabilities return `meta.source: "gemini"`, with
+every factual claim traceable to the facts they were given. Doing this found
+three real defects:
+
+- Thought tokens are drawn from the same budget as the reply, so the shipped
+  `max_output_tokens` was consumed by thinking and *every* live call returned
+  truncated JSON and degraded to the fallback. The stub-client test suite could
+  not catch it.
+- The handover brief labelled the absent engineer's own task update as
+  `verified_fact`, because the prompt's taxonomy had no category for "someone
+  wrote this down and nobody checked it".
+- Its `dependencies` section reported "Not recorded in TeamPulse." while the
+  facts carried a downstream dependent, under-reporting the blast radius.
+
+All three are fixed and the fixes are measured in `docs/evaluation.md`
+section 9.
+
 Google Cloud deployment is fully configured and documented but **has not been
-executed** — no Google Cloud credentials were available in the build
-environment, so there is no deployment URL to report. The Gemini integration is
-real and exercised by the test suite through an injected client; it has not
-been run against the live API for the same reason, and the application reports
-its degraded state honestly when a key is absent.
+executed** — no Google Cloud credentials were available, so there is no
+deployment URL to report.
 
 See `docs/evaluation.md` for measured results and known limitations.
