@@ -1,0 +1,67 @@
+[
+  {
+    "check": "Manager dashboard",
+    "result": "passed",
+    "details": "Metrics, ranked action inbox and linked delivery risks render."
+  },
+  {
+    "check": "Project navigation",
+    "result": "passed",
+    "details": "Project list and direct detail route render seeded tasks."
+  },
+  {
+    "check": "Action evidence",
+    "result": "passed",
+    "details": "Approval drawer explains its ranking and downstream impact."
+  },
+  {
+    "check": "Engineer creates blocker",
+    "result": "passed",
+    "details": "UI submission creates both a support request and tracked action; fallback is labelled."
+  },
+  {
+    "check": "Manager resolves blocker",
+    "result": "passed",
+    "details": "Engineer sees the manager response and resolved request after action completion."
+  },
+  {
+    "check": "Handover creation and analysis",
+    "result": "passed",
+    "details": "Two active tasks, dependency impact and structured fallback briefs generated."
+  },
+  {
+    "check": "Approval preserves ownership",
+    "result": "passed",
+    "details": "Manager approval nominates Arjun; both tasks still belong to Rhea."
+  },
+  {
+    "check": "Backup acceptance transfers tasks",
+    "result": "passed",
+    "details": "Both task owners change only after the nominated backup accepts."
+  },
+  {
+    "check": "Notifications page",
+    "result": "passed",
+    "details": "Notifications render after the handover and request workflows."
+  },
+  {
+    "check": "Direct route reloads",
+    "result": "passed",
+    "details": "Six SPA routes survive direct navigation when served by FastAPI."
+  },
+  {
+    "check": "Unauthorized reads denied",
+    "result": "passed",
+    "details": "API returns 403 for Arjun accessing Diego's request and the insights project."
+  },
+  {
+    "check": "Mobile overview",
+    "result": "passed",
+    "details": "390px viewport has no horizontal page overflow."
+  },
+  {
+    "check": "Browser runtime",
+    "result": "passed",
+    "details": "No uncaught JavaScript errors across the tested flows."
+  }
+]
