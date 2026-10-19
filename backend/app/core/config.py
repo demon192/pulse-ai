@@ -44,6 +44,9 @@ class Settings(BaseSettings):
 
     # --- Authentication ---
     auth_mode: AuthMode = "dev"
+    # Explicitly exposes the demo persona switcher on a public production demo.
+    # Keep false for normal deployments; production remains Firebase-only.
+    judge_demo_mode: bool = False
     firebase_project_id: str | None = None
     # The Firebase *web* config, handed to the SPA by GET /api/auth-config so
     # that sign-in needs no rebuild per environment. These are public client
@@ -51,7 +54,7 @@ class Settings(BaseSettings):
     # authorise anything. Authorisation is the ID token, verified server-side.
     firebase_web_api_key: str | None = None
     firebase_auth_domain: str | None = None
-    # Allows the dev persona switcher. MUST be false in production.
+    # Allows the dev persona switcher; production requires judge_demo_mode.
     dev_auth_enabled: bool = True
     # Allows POST /api/admin/seed. MUST be false in production.
     seed_endpoint_enabled: bool = True
@@ -105,16 +108,20 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _enforce_production_safety(self) -> Settings:
-        """Hard-disable development affordances outside local/staging.
+        """Hard-disable development affordances in production by default.
 
-        This is deliberately not overridable by configuration: a misconfigured
-        production deployment must not expose persona impersonation or a
-        destructive seed-reset endpoint.
+        Persona impersonation is available in production only through the
+        explicit judge-demo opt-in. The destructive seed-reset endpoint stays
+        disabled in all production deployments.
         """
         if self.environment == "production":
-            object.__setattr__(self, "dev_auth_enabled", False)
             object.__setattr__(self, "seed_endpoint_enabled", False)
-            object.__setattr__(self, "auth_mode", "firebase")
+            if self.judge_demo_mode:
+                object.__setattr__(self, "dev_auth_enabled", True)
+                object.__setattr__(self, "auth_mode", "dev")
+            else:
+                object.__setattr__(self, "dev_auth_enabled", False)
+                object.__setattr__(self, "auth_mode", "firebase")
         return self
 
     @property

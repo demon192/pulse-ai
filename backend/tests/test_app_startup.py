@@ -57,6 +57,35 @@ def test_production_settings_disable_dev_affordances():
     assert production.auth_mode == "firebase"
 
 
+def test_judge_demo_mode_exposes_personas_without_enabling_seed_endpoint():
+    from app.core.config import Settings
+    from app.demo.seed import seed
+    from app.main import create_app
+    from app.repositories.database import Database
+    from app.repositories.memory import InMemoryDocumentStore
+    from fastapi.testclient import TestClient
+
+    settings = Settings(environment="production", judge_demo_mode=True)
+    database = Database(InMemoryDocumentStore())
+    seed(database, reset=True)
+    app = create_app(settings=settings, database=database)
+
+    assert settings.auth_mode == "dev"
+    assert settings.dev_auth_enabled is True
+    assert settings.seed_endpoint_enabled is False
+
+    with TestClient(app) as test_client:
+        auth_config = test_client.get("/api/auth-config").json()
+        session = test_client.get(
+            "/api/session", headers={"X-Dev-User-Id": MANAGER}
+        ).json()
+
+    assert auth_config["auth_mode"] == "dev"
+    assert auth_config["dev_personas_enabled"] is True
+    assert session["user"]["id"] == MANAGER
+    assert len(session["dev_personas"]) == 11
+
+
 # --------------------------------------------------------------------------
 # GET /api/auth-config
 #

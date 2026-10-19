@@ -3,9 +3,10 @@
 Two modes:
 
 * ``firebase`` — verifies a Firebase ID token and maps its email to a user.
-  This is the only mode permitted in production.
+    This is the production default and the only mode outside judge demos.
 * ``dev`` — a clearly labelled persona switcher for local demos. It is forced
-  off whenever ``ENVIRONMENT=production`` (see :class:`app.core.config.Settings`).
+    off in production unless ``JUDGE_DEMO_MODE`` is explicitly enabled (see
+    :class:`app.core.config.Settings`).
 
 Authentication only establishes *who* the caller is. What they may see is
 decided separately in :mod:`app.services.authz`.

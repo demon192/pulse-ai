@@ -55,8 +55,12 @@ def create_app(
             settings.auth_mode,
             settings.ai_configured,
         )
-        if settings.environment == "production" and settings.dev_auth_enabled:
-            # Defence in depth: Settings already forces this off.
+        if (
+            settings.environment == "production"
+            and settings.dev_auth_enabled
+            and not settings.judge_demo_mode
+        ):
+            # Defence in depth: Settings disables this outside the explicit demo.
             raise RuntimeError("Development authentication cannot run in production.")
         yield
         logger.info("Shutting down %s", settings.app_name)

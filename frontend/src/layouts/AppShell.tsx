@@ -103,6 +103,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           currentUserId={session.user.id}
           onSwitch={switchPersona}
           authMode={session.auth_mode}
+          environment={session.environment}
           userEmail={session.user.email}
           onSignOut={signOut}
         />
@@ -141,6 +142,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               currentUserId={session.user.id}
               onSwitch={switchPersona}
               authMode={session.auth_mode}
+              environment={session.environment}
               userEmail={session.user.email}
               onSignOut={signOut}
             />
@@ -196,6 +198,7 @@ function SessionFooter({
   currentUserId,
   onSwitch,
   authMode,
+  environment,
   userEmail,
   onSignOut,
 }: {
@@ -203,6 +206,7 @@ function SessionFooter({
   currentUserId: string
   onSwitch: (userId: string) => Promise<void>
   authMode: string
+  environment: string
   userEmail: string
   onSignOut: () => Promise<void>
 }) {
@@ -231,10 +235,12 @@ function SessionFooter({
   return (
     <div className="rounded-lg bg-navy-800/60 p-3">
       <p className="text-[11px] font-semibold uppercase tracking-wider text-navy-300">
-        Development personas
+        {environment === 'production' ? 'Demo personas' : 'Development personas'}
       </p>
       <p className="mt-1 text-[11px] text-navy-300/80">
-        Local demo only. Disabled in production.
+        {environment === 'production'
+          ? 'Persona switching is enabled for this judge demo.'
+          : 'Local demo only.'}
       </p>
       <label className="mt-2 block">
         <span className="sr-only">Switch persona</span>
